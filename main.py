@@ -1,22 +1,28 @@
-from PyQt4 import QtGui
+from PyQt4 import QtGui, QtCore
 import sys
 from gui import gui
 import lib.diff_match_patch as DMP
 from socket import AF_INET, SOCK_STREAM, socket
+from socket import error as socketError
+import threading
+import Queue
 
 textA = "the cat in the red hat"
 textB = "the feline in the blue hat"
 
-lorem = reduce(lambda x,y : x+y ,open('lorem','r').readlines())
+lorem = reduce(lambda x, y: x+y, open('lorem', 'r').readlines())
 
 
 class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
+	# Custom signals
+	updateSignal = QtCore.pyqtSignal(str)
+
 	def __init__(self, parent=None):
 		super(GuiApp, self).__init__(parent)
 		self.setupUi(self)
 
 		# init text
-		self.textEdit_2.setText(lorem)
+		# self.textEdit_2.setText(lorem)
 		self.textEdit.setText(lorem)
 		self.currentText = str(self.textEdit.toPlainText())
 
@@ -29,15 +35,35 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 
 		self.tcpSocket = socket(AF_INET, SOCK_STREAM)
 
+		self.sendQueue = Queue.Queue()
+
+		# Set up signals
+		self.connect(self, QtCore.SIGNAL('updateStatus'),
+		             self.statusUpdateMethod)
+
+		self.connect(self, QtCore.SIGNAL('updateText'),
+		             self.textUpdateMethod)
+
+	def textUpdateMethod(self, patchText):
+		patch = self.dmp.patch_fromText(patchText)
+		oldText = str(self.textEdit.toPlainText())
+		newText, result = self.dmp.patch_apply(patch, oldText)
+		self.textEdit.setText(newText)
+		return
+
+	def statusUpdateMethod(self, text):
+		self.textEdit_2.append(text)
+		return
+
 	def newDocumentMethod(self):
 		addr = self.addressLineEdit.text()
 		if len(addr) == len('000.000.000.000'):
 			port = self.portSpinBox.value()
 			self.tcpSocket.bind((addr, port))
-			self.statusLabel.setText('Socket is listening on %s:%d' % self.tcpSocket.getsockname())
-			self.tcpSocket.listen(10)
-			client_socket, client_addr = self.tcpSocket.accept()
-			self.statusLabel.setText('Client connected from %s:%d' % client_socket.getsockname())
+			thread = threading.Thread(target=self.connectionManagerThread)
+			thread.start()
+			self.statusLabel.setText('Master Document')
+			self.newPushButton.setDisabled(True)
 		return
 
 	def remoteDocumentMethod(self):
@@ -45,11 +71,14 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		if len(addr) == len('000.000.000.000'):
 			port = self.portSpinBox.value()
 			self.tcpSocket.connect((addr, port))
-			self.statusLabel.setText('Connected to %s:%d' % (addr, port))
+			self.textEdit_2.append('Connected to %s:%d' % (addr, port))
+			thread = threading.Thread(target=self.sendThread)
+			thread.start()
+			self.remotePushButton.setDisabled(True)
+			self.statusLabel.setText('Slave Document')
 		return
 
 	def textChangeMethod(self):
-
 		oldText = self.currentText
 		diffText = str(self.textEdit.toPlainText())
 
@@ -58,15 +87,40 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		# compile patches
 		patch = self.dmp.patch_make(oldText, diffText, diffs)
 		# create text from patches
-		newText, result = self.dmp.patch_apply(patch, str(self.textEdit_2.toPlainText()))
+		self.sendQueue.put(self.dmp.patch_toText(patch))
 
-		if False in result:
-			print result
+		self.currentText = diffText
+		return
 
-		self.textEdit_2.setText(newText)
+	def connectionManagerThread(self):
+		while True:
+			self.emit(QtCore.SIGNAL('updateStatus'), 'Socket is listening on %s:%d' % self.tcpSocket.getsockname())
+			self.tcpSocket.listen(5)
+			client_socket, client_addr = self.tcpSocket.accept()
+			thread = threading.Thread(target=self.connectionThread,
+			                          args=(client_socket, client_addr))
+			thread.start()
+		return
 
-		self.currentText = newText
+	def connectionThread(self, client_socket, client_addr):
+		self.emit(QtCore.SIGNAL('updateStatus'), 'Client connected from %s:%d' % client_socket.getsockname())
+		try:
+			while True:
+				data = client_socket.recv(2**16)
+				print "recieved, :\n",data
+				self.emit(QtCore.SIGNAL('updateText'), data)
+		except socketError, d:
+			print socketError, d
+		return
 
+	def sendThread(self):
+		try:
+			while True:
+				data = self.sendQueue.get()
+				print "sending :\n", data
+				self.tcpSocket.send(data)
+		except socketError, d:
+			print socketError, d
 		return
 
 
@@ -78,33 +132,3 @@ def main():
 
 
 main()
-
-# create a diff_match_patch object
-dmp = DMP.diff_match_patch()
-
-# Depending on the kind of text you work with, in term of overall length
-# and complexity, you may want to extend (or here suppress) the
-# time_out feature
-dmp.Diff_Timeout = 0  # or some other value, default is 1.0 seconds
-
-# All 'diff' jobs start with invoking diff_main()
-diffs = dmp.diff_main(textA, textB)
-
-# diff_cleanupSemantic() is used to make the diffs array more "human" readable
-dmp.diff_cleanupSemantic(diffs)
-
-print diffs
-# and if you want the results as some ready to display HMTL snippet
-htmlSnippet = dmp.diff_prettyHtml(diffs)
-
-print htmlSnippet
-
-txt0 = ''
-txt1 = ''
-
-patch = dmp.patch_make(textA, textB, diffs)
-
-print dmp.patch_toText(patch)
-
-print dmp.patch_apply(patch, textA)
-print textB
