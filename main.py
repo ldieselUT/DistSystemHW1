@@ -17,7 +17,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		super(GuiApp, self).__init__(parent)
 		self.setupUi(self)
 
-		self.protocolPattern = r'([^:]+)\:(.+)'
+		self.protocolPattern = r'([^:]+)\:(.*)'
 
 		# init text
 		# self.textEdit_2.setText(lorem)
@@ -42,9 +42,29 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		self.connect(self, QtCore.SIGNAL('updateText'),
 		             self.textUpdateMethod)
 
+		self.connect(self, QtCore.SIGNAL('replaceText'),
+		             self.replaceTextMethod)
+
 		self.connections = list()
 
 		self.isMaster = False
+
+	def replaceTextMethod(self, text):
+		# save cursor and scrollbar location
+		cursor = self.textEdit.textCursor()
+		cursorPos = cursor.position()
+		scrollPos = self.textEdit.verticalScrollBar().value()
+
+		# resync text
+		self.textEdit.blockSignals(True)
+		self.textEdit.setText(text)
+		self.textEdit.blockSignals(False)
+
+		# restore cursor and scrollbar
+		cursor.setPosition(cursorPos)
+		self.textEdit.verticalScrollBar().setValue(scrollPos)
+		self.textEdit.setTextCursor(cursor)
+		return
 
 	def textUpdateMethod(self, patchText):
 		# save cursor and scrollbar location
@@ -54,16 +74,19 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 
 		# apply patch to text
 		patch = self.dmp.patch_fromText(patchText)
-		addLoc = int(patchText.split(' ')[2].split(',')[0])
+		try:
+			addLoc = int(patchText.split(' ')[2].split(',')[0])
+		except:
+			print 'patchtext error: \n', patchText
 
 		oldText = str(self.textEdit.toPlainText())
 		newText, result = self.dmp.patch_apply(patch, oldText)
 		cursorDelta = len(newText) - len(oldText)
 
 		if False in result:
+			self.sendQueue.put(('RESYNC', 'help!'))
 			self.emit(QtCore.SIGNAL('updateStatus'),
 			          'error %s' % str(result))
-
 
 		self.textEdit.blockSignals(True)
 		self.textEdit.setText(newText)
@@ -119,7 +142,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		# compile patches
 		patch = self.dmp.patch_make(oldText, diffText, diffs)
 		# create text from patches
-		self.sendQueue.put(('DIFF',self.dmp.patch_toText(patch)))
+		self.sendQueue.put(('DIFF', self.dmp.patch_toText(patch)))
 
 		self.currentText = diffText
 		return
@@ -142,8 +165,8 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			while True:
 				command, data = self.sendQueue.get()
 				for connection in self.connections:
-					self.emit(QtCore.SIGNAL('updateStatus'), "sending ServerThread :\n%s" % data)
-					connection.send(command+':'+data)
+					self.emit(QtCore.SIGNAL('updateStatus'), "sending ServerThread :\n%s\n%s" % (command, data))
+					connection.sendall(command + ':' + data)
 		except socketError, d:
 			print socketError, d
 		return
@@ -152,7 +175,13 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		self.emit(QtCore.SIGNAL('updateStatus'), 'Client connected from %s:%d' % client_socket.getsockname())
 		try:
 			while True:
-				data = client_socket.recv(2**16)
+				data = ''
+				while True:
+					buf = client_socket.recv(4096)
+					data += buf
+					if len(buf) < 4096:
+						break
+
 				match = re.match(self.protocolPattern, data, flags=re.S)
 				if match:
 					command, value = match.groups()
@@ -161,6 +190,16 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 						self.emit(QtCore.SIGNAL('updateStatus'), "received ConnectionThread :\n%s" % value)
 						self.emit(QtCore.SIGNAL('updateText'), value)
 
+					elif command == 'RESYNC':
+						text = str(self.textEdit.toPlainText())
+						self.emit(QtCore.SIGNAL('updateStatus'), "received RESYNC, sending FULLTEXT:\n%s" % text)
+						self.sendQueue.put(('FULLTEXT', text))
+
+					elif command == 'FULLTEXT':
+						self.emit(QtCore.SIGNAL('updateStatus'), "recived FULLTEXT:\n%s" % value)
+						self.emit(QtCore.SIGNAL('replaceText'), value)
+					else:
+						self.emit(QtCore.SIGNAL('updateStatus'), 'commanderror :\n%s' % (data))
 
 		except socketError, d:
 			self.connections.remove(self.connections.index(client_socket))
@@ -172,7 +211,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			while True:
 				command, data = self.sendQueue.get()
 				self.emit(QtCore.SIGNAL('updateStatus'), "sending Send Thread:\n%s" % data)
-				self.tcpSocket.send(command + ':' + data)
+				self.tcpSocket.sendall(command + ':' + data)
 		except socketError, d:
 			print socketError, d
 		return
