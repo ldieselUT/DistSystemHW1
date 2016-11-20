@@ -115,7 +115,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			thread.start()
 			self.statusLabel.setText('Master Document')
 			self.newPushButton.setDisabled(True)
-			#self.isMaster = True
+			self.isMaster = True
 		return
 
 	def remoteDocumentMethod(self):
@@ -131,6 +131,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			connectThread.start()
 			self.remotePushButton.setDisabled(True)
 			self.statusLabel.setText('Slave Document')
+			self.sendQueue.put(('RESYNC', 'help!'))
 		return
 
 	def textChangeMethod(self):
@@ -202,7 +203,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 						self.emit(QtCore.SIGNAL('updateStatus'), 'commanderror :\n%s' % (data))
 
 		except socketError, d:
-			self.connections.remove(self.connections.index(client_socket))
+			self.connections.remove(client_socket)
 			print socketError, d
 		return
 
