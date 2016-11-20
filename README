@@ -1,0 +1,8 @@
+To run 'python main.py'
+
+need PyQT installed to run, tested on a Win7 computer
+
+Create a master document by pressing the "new document" button and join
+the master document by pressing the "remote document button".
+
+NB! this program does not exit cleanly you may need to kill the python process after the GUI is closed
