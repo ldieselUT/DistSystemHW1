@@ -18,7 +18,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		self.setupUi(self)
 
 		# init text
-		# self.textEdit_2.setText(lorem)
+		self.textEdit_2.setReadOnly(True)
 		self.textEdit.setText(lorem)
 		self.currentText = str(self.textEdit.toPlainText())
 
