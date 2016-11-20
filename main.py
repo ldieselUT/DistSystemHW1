@@ -17,8 +17,6 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		super(GuiApp, self).__init__(parent)
 		self.setupUi(self)
 
-		self.protocolPattern = r'([^:]+)\:(.*)'
-
 		# init text
 		# self.textEdit_2.setText(lorem)
 		self.textEdit.setText(lorem)
@@ -48,6 +46,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		self.connections = list()
 
 		self.isMaster = False
+		self.lastDiffID = ''
 
 	def replaceTextMethod(self, text):
 		# save cursor and scrollbar location
@@ -78,6 +77,10 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			addLoc = int(patchText.split(' ')[2].split(',')[0])
 		except:
 			print 'patchtext error: \n', patchText
+			self.sendQueue.put(('RESYNC', 'help!'))
+			self.emit(QtCore.SIGNAL('updateStatus'),
+			          'error %s' % patchText)
+			return
 
 		oldText = str(self.textEdit.toPlainText())
 		newText, result = self.dmp.patch_apply(patch, oldText)
@@ -88,12 +91,15 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			self.emit(QtCore.SIGNAL('updateStatus'),
 			          'error %s' % str(result))
 
-		self.textEdit.blockSignals(True)
-		self.textEdit.setText(newText)
-		self.textEdit.blockSignals(False)
+		if not self.isMaster:
+			self.textEdit.blockSignals(True)
+			self.textEdit.setText(newText)
+			self.textEdit.blockSignals(False)
+		else:
+			self.textEdit.setText(newText)
 
 		# restore cursor and scrollbar
-		if addLoc < cursorPos:
+		if addLoc < cursorPos and (cursorPos + cursorDelta) > 0:
 			cursor.setPosition(cursorPos + cursorDelta)
 		else:
 			cursor.setPosition(cursorPos)
@@ -127,7 +133,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			thread = threading.Thread(target=self.sendThread)
 			thread.start()
 			connectThread = threading.Thread(target=self.connectionThread,
-			                                args=(self.tcpSocket, 'client_addr'))
+			                                args=(self.tcpSocket, ''))
 			connectThread.start()
 			self.remotePushButton.setDisabled(True)
 			self.statusLabel.setText('Slave Document')
@@ -163,17 +169,22 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 
 	def serverThread(self):
 		try:
+			parser = r'([^:]+)\:(\d+)'
 			while True:
 				command, data = self.sendQueue.get()
 				for connection in self.connections:
-					self.emit(QtCore.SIGNAL('updateStatus'), "sending ServerThread :\n%s\n%s" % (command, data))
-					connection.sendall(command + ':' + data)
+					if self.lastDiffID == '%s:%d' % connection.getpeername():
+						self.lastDiffID = ''
+					else:
+						self.emit(QtCore.SIGNAL('updateStatus'),
+						          "sending ServerThread :\n%s\n%s" % (command, data[:10] + '...' + data[-10:]))
+						connection.sendall(command + ';' + '%s:%d' % self.tcpSocket.getsockname() + ';' + data)
 		except socketError, d:
 			print socketError, d
 		return
 
 	def connectionThread(self, client_socket, client_addr):
-		self.emit(QtCore.SIGNAL('updateStatus'), 'Client connected from %s:%d' % client_socket.getsockname())
+		self.emit(QtCore.SIGNAL('updateStatus'), 'Client %s connected to %s:%d' % ((client_addr,) + client_socket.getsockname()))
 		try:
 			while True:
 				data = ''
@@ -182,26 +193,23 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 					data += buf
 					if len(buf) < 4096:
 						break
-
-				match = re.match(self.protocolPattern, data, flags=re.S)
+				protocolPattern = r'([^;]+)\;([^;]+)\;(.*)'
+				match = re.match(protocolPattern, data, flags=re.S)
 				if match:
-					command, value = match.groups()
-
+					command, info, value = match.groups()
+					self.emit(QtCore.SIGNAL('updateStatus'),
+					          "received %s from %s: \n(%s)" % (command, info, data[:10]+'[...]'+data[-10:]))
 					if command == 'DIFF':
-						self.emit(QtCore.SIGNAL('updateStatus'), "received ConnectionThread :\n%s" % value)
-						self.emit(QtCore.SIGNAL('updateText'), value)
+						self.lastDiffID = info
 
+						self.emit(QtCore.SIGNAL('updateText'), value)
 					elif command == 'RESYNC':
 						text = str(self.textEdit.toPlainText())
-						self.emit(QtCore.SIGNAL('updateStatus'), "received RESYNC, sending FULLTEXT:\n%s" % text)
 						self.sendQueue.put(('FULLTEXT', text))
-
 					elif command == 'FULLTEXT':
-						self.emit(QtCore.SIGNAL('updateStatus'), "recived FULLTEXT:\n%s" % value)
 						self.emit(QtCore.SIGNAL('replaceText'), value)
 					else:
 						self.emit(QtCore.SIGNAL('updateStatus'), 'commanderror :\n%s' % (data))
-
 		except socketError, d:
 			self.connections.remove(client_socket)
 			print socketError, d
@@ -212,7 +220,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			while True:
 				command, data = self.sendQueue.get()
 				self.emit(QtCore.SIGNAL('updateStatus'), "sending Send Thread:\n%s" % data)
-				self.tcpSocket.sendall(command + ':' + data)
+				self.tcpSocket.sendall(command + ';' '%s:%d' % self.tcpSocket.getsockname() + ';' + data)
 		except socketError, d:
 			print socketError, d
 		return
