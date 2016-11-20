@@ -87,9 +87,13 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 		cursorDelta = len(newText) - len(oldText)
 
 		if False in result:
-			self.sendQueue.put(('RESYNC', 'help!'))
-			self.emit(QtCore.SIGNAL('updateStatus'),
-			          'error %s' % str(result))
+			if self.isMaster:
+				text = str(self.textEdit.toPlainText())
+				self.sendQueue.put(('FULLTEXT', text))
+			else:
+				self.sendQueue.put(('RESYNC', 'help!'))
+				self.emit(QtCore.SIGNAL('updateStatus'),
+				          'error %s' % str(result))
 
 		if not self.isMaster:
 			self.textEdit.blockSignals(True)
@@ -169,7 +173,6 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 
 	def serverThread(self):
 		try:
-			parser = r'([^:]+)\:(\d+)'
 			while True:
 				command, data = self.sendQueue.get()
 				for connection in self.connections:
@@ -201,7 +204,6 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 					          "received %s from %s: \n(%s)" % (command, info, data[:10]+'[...]'+data[-10:]))
 					if command == 'DIFF':
 						self.lastDiffID = info
-
 						self.emit(QtCore.SIGNAL('updateText'), value)
 					elif command == 'RESYNC':
 						text = str(self.textEdit.toPlainText())
