@@ -123,6 +123,8 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			self.tcpSocket.bind((addr, port))
 			thread = threading.Thread(target=self.connectionManagerThread)
 			thread.start()
+			sendThread = threading.Thread(target=self.serverThread)
+			sendThread.start()
 			self.statusLabel.setText('Master Document')
 			self.newPushButton.setDisabled(True)
 			self.isMaster = True
@@ -167,8 +169,7 @@ class GuiApp(QtGui.QMainWindow, gui.Ui_MainWindow):
 			                                args=(client_socket, client_addr))
 			connectThread.start()
 			self.connections.append(client_socket)
-			sendThread = threading.Thread(target=self.serverThread)
-			sendThread.start()
+
 		return
 
 	def serverThread(self):
